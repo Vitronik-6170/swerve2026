@@ -20,6 +20,14 @@ import edu.wpi.first.math.numbers.N3;
 import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
 import frc.robot.Constants.DriveConstants;
 import edu.wpi.first.wpilibj2.command.SubsystemBase;
+import com.pathplanner.lib.auto.AutoBuilder;
+import com.pathplanner.lib.config.PIDConstants;
+import com.pathplanner.lib.config.RobotConfig;
+import com.pathplanner.lib.controllers.PPHolonomicDriveController;
+import com.pathplanner.lib.util.PathPlannerLogging;
+
+import edu.wpi.first.wpilibj.DriverStation;
+import edu.wpi.first.wpilibj.smartdashboard.Field2d;
 
 public class DriveSubsystem extends SubsystemBase {
 
@@ -59,9 +67,57 @@ public class DriveSubsystem extends SubsystemBase {
       VecBuilder.fill(0.05, 0.05, 0.05),
       VecBuilder.fill(0.5, 0.5, 9999)
   );
+ private final Field2d m_field = new Field2d();
 
   public DriveSubsystem() {
     HAL.report(tResourceType.kResourceType_RobotDrive, tInstances.kRobotDriveSwerve_MaxSwerve);
+    // Publica el Field2d en SmartDashboard (aquí se ve la simulación)
+SmartDashboard.putData("Field", m_field);
+
+// ── PathPlanner Logging ────────────────────────────────────────────────
+// Estos callbacks le dicen a PathPlanner cómo actualizar la visualización
+// en su GUI y en el Field2d de SmartDashboard
+
+// Pose actual del robot
+PathPlannerLogging.setLogCurrentPoseCallback(pose -> {
+    m_field.setRobotPose(pose);
+});
+
+// Pose objetivo (a dónde PathPlanner quiere que vaya el robot)
+PathPlannerLogging.setLogTargetPoseCallback(pose -> {
+    m_field.getObject("Target Pose").setPose(pose);
+});
+
+// La ruta activa completa
+PathPlannerLogging.setLogActivePathCallback(poses -> {
+    m_field.getObject("Active Path").setPoses(poses);
+});
+
+// ── AutoBuilder ────────────────────────────────────────────────────────
+RobotConfig config;
+try {
+    config = RobotConfig.fromGUISettings();
+} catch (Exception e) {
+    DriverStation.reportError("Failed to load PathPlanner config", e.getStackTrace());
+    return;
+}
+
+AutoBuilder.configure(
+    this::getPose,
+    this::resetOdometry,
+    this::getChassisSpeeds,
+    this::driveRobotRelative,
+    new PPHolonomicDriveController(
+        new PIDConstants(5.0, 0.0, 0.0),
+        new PIDConstants(5.0, 0.0, 0.0)
+    ),
+    config,
+    () -> {
+        var alliance = DriverStation.getAlliance();
+        return alliance.isPresent() && alliance.get() == DriverStation.Alliance.Red;
+    },
+    this
+);
   }
 
   @Override
@@ -106,6 +162,24 @@ public class DriveSubsystem extends SubsystemBase {
         },
         pose);
   }
+  public ChassisSpeeds getChassisSpeeds() {
+    return DriveConstants.kDriveKinematics.toChassisSpeeds(
+        m_frontLeft.getState(),
+        m_frontRight.getState(),
+        m_rearLeft.getState(),
+        m_rearRight.getState()
+    );
+}
+
+public void driveRobotRelative(ChassisSpeeds speeds) {
+    var states = DriveConstants.kDriveKinematics.toSwerveModuleStates(speeds);
+    SwerveDriveKinematics.desaturateWheelSpeeds(states, DriveConstants.kMaxSpeedMetersPerSecond);
+    m_frontLeft.setDesiredState(states[0]);
+    m_frontRight.setDesiredState(states[1]);
+    m_rearLeft.setDesiredState(states[2]);
+    m_rearRight.setDesiredState(states[3]);
+}
+
 
   public ChassisSpeeds getFieldRelativeSpeeds() {
     ChassisSpeeds chassisSpeeds = DriveConstants.kDriveKinematics.toChassisSpeeds(
